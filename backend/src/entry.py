@@ -56,24 +56,38 @@ def env_text(env, name: str, default: str = "") -> str:
 
 def cors_headers(env, request_origin: str = "") -> dict[str, str]:
     allowed_origins = [item.strip() for item in env_text(env, "FRONTEND_URL", "http://localhost:5173").split(",") if item.strip()]
-    allowed_origin = request_origin if request_origin in allowed_origins else allowed_origins[0]
+    if request_origin:
+        is_allowed = (
+            request_origin in allowed_origins
+            or request_origin.startswith("http://localhost:")
+            or request_origin.startswith("http://127.0.0.1:")
+            or request_origin.startswith("https://localhost:")
+            or (request_origin.startswith("https://") and (
+                request_origin.endswith(".vercel.app") or
+                request_origin.endswith(".pages.dev")
+            ))
+        )
+        allowed_origin = request_origin if is_allowed else allowed_origins[0]
+    else:
+        allowed_origin = allowed_origins[0]
     return {
         "access-control-allow-origin": allowed_origin,
+        "access-control-allow-credentials": "true",
         "access-control-allow-methods": "GET, POST, PATCH, OPTIONS",
-        "access-control-allow-headers": "Authorization, Content-Type",
+        "access-control-allow-headers": "Authorization, Content-Type, x-demo-role",
         "access-control-max-age": "86400",
         "vary": "Origin",
     }
 
 
-def json_response(env, payload, status: int = 200) -> JSONResponse:
-    headers = cors_headers(env)
+def json_response(env, payload, status: int = 200, request_origin: str = "") -> JSONResponse:
+    headers = cors_headers(env, request_origin)
     headers["cache-control"] = "no-store, no-cache, must-revalidate, max-age=0"
     return JSONResponse(payload, status_code=status, headers=headers)
 
 
-def error_response(env, error: ApiError) -> Response:
-    return json_response(env, {"error": error.message, "detail": error.message}, error.status)
+def error_response(env, error: ApiError, request_origin: str = "") -> Response:
+    return json_response(env, {"error": error.message, "detail": error.message}, error.status, request_origin)
 
 
 def bearer_token(request) -> str | None:
@@ -247,6 +261,12 @@ async def complaint_get(env, request, query: dict[str, list[str]]) -> Response:
             c["history"] = history_map.get(c["id"], [])
             
         return json_response(env, {"complaints": complaints})
+    if scope == "mine":
+        user = await current_user(env, request)
+        if user:
+            complaints = await db_all(env.DB, COMPLAINT_SELECT + " WHERE c.citizen_id=? ORDER BY c.created_at DESC", user["id"])
+            return json_response(env, {"complaints": complaints})
+        return json_response(env, {"complaints": []})
     raise ApiError(400, "Unknown scope")
 
 
@@ -452,7 +472,15 @@ async def add_cors_headers(request: Request, call_next):
 
 @app.exception_handler(ApiError)
 async def api_error_handler(request: Request, error: ApiError):
-    return error_response(request.scope["env"], error)
+    return error_response(request.scope["env"], error, request.headers.get("origin", ""))
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    origin = request.headers.get("origin", "")
+    headers = cors_headers(request.scope["env"], origin)
+    headers["cache-control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    return JSONResponse({"error": str(exc), "detail": str(exc)}, status_code=500, headers=headers)
 
 
 @app.get("/api/health", tags=["System"])
@@ -497,6 +525,45 @@ async def get_departments(request: Request):
     env = request.scope["env"]
     depts = await db_all(env.DB, "SELECT id, name, category FROM departments ORDER BY id ASC")
     return json_response(env, {"departments": depts})
+
+
+DEFAULT_OFFICERS = {
+    "civic_infra": [
+        {"id": "ci-1", "name": "Rajesh Kumar", "designation": "Chief Civil Engineer", "status": "active"},
+        {"id": "ci-2", "name": "Anita Verma", "designation": "Sanitation Inspector", "status": "active"},
+        {"id": "ci-3", "name": "Sunil Sharma", "designation": "Road & Drainage Supervisor", "status": "active"},
+    ],
+    "health_edu": [
+        {"id": "he-1", "name": "Dr. Priya Patel", "designation": "Chief Medical Officer", "status": "active"},
+        {"id": "he-2", "name": "Manoj Tiwari", "designation": "District Education Officer", "status": "active"},
+    ],
+    "law_order": [
+        {"id": "lo-1", "name": "Inspector Vikram Singh", "designation": "Station House Officer", "status": "active"},
+        {"id": "lo-2", "name": "Sub-Inspector Neha Rao", "designation": "Public Safety Coordinator", "status": "active"},
+    ],
+    "transport": [
+        {"id": "tp-1", "name": "Amit Saxena", "designation": "Regional Transport Officer", "status": "active"},
+        {"id": "tp-2", "name": "Kavita Nair", "designation": "Depot Transit Manager", "status": "active"},
+    ],
+    "employment_welfare": [
+        {"id": "ew-1", "name": "Suresh Gupta", "designation": "Welfare Officer", "status": "active"},
+        {"id": "ew-2", "name": "Pooja Mishra", "designation": "Social Security Coordinator", "status": "active"},
+    ],
+}
+
+
+@app.get("/api/kv/officers/{category}", tags=["Officers"])
+@app.get("/kv/officers/{category}", tags=["Officers"])
+async def get_officers(request: Request, category: str):
+    env = request.scope["env"]
+    return json_response(env, DEFAULT_OFFICERS.get(category, []))
+
+
+@app.post("/api/kv/officers/{category}", tags=["Officers"])
+@app.post("/kv/officers/{category}", tags=["Officers"])
+async def save_officers(request: Request, category: str):
+    env = request.scope["env"]
+    return json_response(env, {"ok": True})
 
 
 @app.post("/api/auth/register", tags=["Authentication"])

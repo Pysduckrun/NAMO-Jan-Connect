@@ -1,6 +1,6 @@
 export function apiUrl(path: string): string {
   const base = globalThis.__NJC_API_URL__ || "";
-  return path.startsWith("/api") ? `${base}${path}` : path;
+  return (path.startsWith("/api") || path.startsWith("/kv")) ? `${base}${path}` : path;
 }
 
 export function setCookie(name: string, value: string, days = 30) {
