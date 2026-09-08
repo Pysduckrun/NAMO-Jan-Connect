@@ -9,6 +9,7 @@ import AccessibilityBar from "./AccessibilityBar";
 import GovHeader from "./GovHeader";
 import TickerBanner from "./TickerBanner";
 import Modal from "./Modal";
+import ImageUploadPreview from "./ImageUploadPreview";
 import { LanguageProvider, useLanguage } from "../context/LanguageContext";
 import { apiFetch, readJson, fetchOfficers, saveOfficers, getCookie, eraseCookie } from "../api";
 import { 
@@ -230,7 +231,10 @@ function PublicHome({ stats, onFile, onTrack }: { stats: { total: number; resolv
   const resolutionRate = stats.total ? Math.round((stats.resolved / stats.total) * 100) : 0;
   const { t } = useLanguage();
   return <main>
-    <section className="hero"><div className="hero-copy"><p className="eyebrow"><span>{t("hero.eyebrow")}</span></p><h1>{t("hero.h1_line1")}<br /><em>{t("hero.h1_em")}</em></h1><p className="hero-lede">{t("hero.lede")}</p><div className="hero-actions"><button className="btn btn-primary btn-large" onClick={onFile}>{t("hero.cta_file")} <span>↗</span></button><button className="btn btn-line btn-large" onClick={onTrack}>{t("hero.cta_track")} <span>→</span></button></div></div><div className="hero-visual" aria-label="Complaint workflow"><div className="orbit orbit-one" /><div className="orbit orbit-two" /><div className="sample-card workflow-card"><p className="mono">{t("hero.workflow_label")}</p><h3>{t("hero.workflow_title")}</h3><div className="workflow-steps"><span>{t("hero.step_submitted")}</span><span>{t("hero.step_acknowledged")}</span><span>{t("hero.step_inprogress")}</span><span>{t("hero.step_resolved")}</span></div><div className="sample-update"><span>✓</span><p><b>{t("hero.update_title")}</b><small>{t("hero.update_body")}</small></p></div></div><div className="floating-note note-routed"><span>✓</span><p><b>{t("hero.routing_title")}</b><small>{t("hero.routing_body")}</small></p></div></div></section>
+    <section className="hero">
+      <div className="hero-backdrop-bg" aria-hidden="true" />
+      <div className="hero-backdrop-overlay" aria-hidden="true" />
+      <div className="hero-copy"><p className="eyebrow"><span>{t("hero.eyebrow")}</span></p><h1>{t("hero.h1_line1")}<br /><em>{t("hero.h1_em")}</em></h1><p className="hero-lede">{t("hero.lede")}</p><div className="hero-actions"><button className="btn btn-primary btn-large" onClick={onFile}>{t("hero.cta_file")} <span>↗</span></button><button className="btn btn-line btn-large" onClick={onTrack}>{t("hero.cta_track")} <span>→</span></button></div></div><div className="hero-visual" aria-label="Complaint workflow"><div className="orbit orbit-one" /><div className="orbit orbit-two" /><div className="sample-card workflow-card"><p className="mono">{t("hero.workflow_label")}</p><h3>{t("hero.workflow_title")}</h3><div className="workflow-steps"><span>{t("hero.step_submitted")}</span><span>{t("hero.step_acknowledged")}</span><span>{t("hero.step_inprogress")}</span><span>{t("hero.step_resolved")}</span></div><div className="sample-update"><span>✓</span><p><b>{t("hero.update_title")}</b><small>{t("hero.update_body")}</small></p></div></div><div className="floating-note note-routed"><span>✓</span><p><b>{t("hero.routing_title")}</b><small>{t("hero.routing_body")}</small></p></div></div></section>
     <section className="proof-strip" id="transparency"><div><b>{stats.total.toLocaleString("en-IN")}</b><span>{t("stats.filed")}</span></div><div><b>{stats.resolved.toLocaleString("en-IN")}</b><span>{t("stats.resolved")}</span></div><div><b>{stats.active.toLocaleString("en-IN")}</b><span>{t("stats.active")}</span></div><div><b>{stats.avgDays > 0 ? stats.avgDays : "—"}</b><span>{t("stats.avg_days")}</span></div></section>
     <section className="how" id="how"><div className="section-intro"><p className="eyebrow">{t("how.eyebrow")}</p><h2>{t("how.h2_line1")}<br /><em>{t("how.h2_em")}</em></h2><p>{t("how.intro")}</p></div><div className="steps"><article><span className="step-number">01</span><div className="step-icon"><FileEdit size={24} /></div><h3>{t("how.step1_title")}</h3><p>{t("how.step1_body")}</p></article><article><span className="step-number">02</span><div className="step-icon"><Cpu size={24} /></div><h3>{t("how.step2_title")}</h3><p>{t("how.step2_body")}</p></article><article><span className="step-number">03</span><div className="step-icon"><CheckCircle2 size={24} /></div><h3>{t("how.step3_title")}</h3><p>{t("how.step3_body")}</p></article></div></section>
     <section className="categories"><div className="category-copy"><p className="eyebrow">{t("cat.eyebrow")}</p><h2>{t("cat.h2_line1")}<br /><em>{t("cat.h2_em")}</em></h2></div><div className="category-grid">{Object.entries(categoryMeta).map(([key, meta]) => <article key={key} className={`category-card tone-${meta.tone}`}><span>{meta.mark}</span><h3>{meta.label}</h3><p>{t(`cat.${key}`)}</p></article>)}</div></section>
@@ -345,23 +349,31 @@ function DepartmentPortal({ complaints, onSelect, onChanged }: { complaints: Com
 
   // Load and save officers list via Cloudflare KV
   const [officers, setOfficers] = useState<{ id: string; name: string; designation: string; status: string; cases: number; performance: string }[]>([]);
+  const [officersLoaded, setOfficersLoaded] = useState(false);
 
   // Fetch officers when category or complaints change
   useEffect(() => {
+    let active = true;
     async function loadOfficers() {
       try {
         const data = await fetchOfficers(category);
-        setOfficers(data);
+        if (!active) return;
+        setOfficers(Array.isArray(data) ? data : []);
       } catch (e) {
         console.error('Failed to load officers', e);
-        setOfficers([]);
+        if (active) setOfficers([]);
+      } finally {
+        if (active) setOfficersLoaded(true);
       }
     }
+    setOfficersLoaded(false);
     loadOfficers();
+    return () => { active = false; };
   }, [category, complaints]);
 
-  // Save officers back to Cloudflare when they change
+  // Save officers back when modified after initial load
   useEffect(() => {
+    if (!officersLoaded) return;
     async function save() {
       try {
         await saveOfficers(category, officers);
@@ -369,8 +381,8 @@ function DepartmentPortal({ complaints, onSelect, onChanged }: { complaints: Com
         console.error('Failed to save officers', e);
       }
     }
-    if (officers.length) save();
-  }, [officers, category]);
+    void save();
+  }, [officers, category, officersLoaded]);
 
   const [addModalOpen, setAddModalOpen] = useState(false);
   const dynamicOfficers = computeDynamicOfficerStats(officers, complaints, category);
@@ -854,7 +866,7 @@ function ComplaintForm({ onClose, onCreated }: { onClose: () => void; onCreated:
       </Modal>
     );
   }
-  return <Modal title="File a complaint" eyebrow="NO ACCOUNT OR LOGIN REQUIRED" onClose={onClose} wide><p className="no-login-note">Your contact details let the department send updates. They are never displayed in the public gallery.</p><div className="form-progress"><span className="active"><i>1</i>Contact & concern</span><em /><span className={step >= 2 ? "active" : ""}><i>2</i>Evidence & review</span></div><form className="complaint-form" onSubmit={submit}><div className={step === 1 ? "form-step" : "form-step hidden"}><div className="contact-fields"><label>Your name<input name="citizenName" minLength={2} maxLength={100} required placeholder="Full name" /></label><label>Phone number<input name="citizenPhone" type="tel" inputMode="tel" pattern="\+?[0-9]{10,15}" required placeholder="+91 9876543210" /></label><label>Email address (Optional)<input name="citizenEmail" type="email" placeholder="you@example.com" /></label></div><div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", margin: "16px 0" }}><label style={{ margin: 0 }}>Grievance Language / शिकायत की भाषा<select value={selectedLang} onChange={(event) => setSelectedLang(event.target.value)} style={{ marginTop: "6px" }}>{["English", "Hindi", "Bengali", "Marathi", "Telugu", "Tamil", "Gujarati", "Urdu", "Kannada", "Odia", "Malayalam", "Punjabi"].map((lang) => <option key={lang} value={lang}>{lang}</option>)}</select></label><label style={{ margin: 0 }}>What is this about?<select name="category" required defaultValue="" style={{ marginTop: "6px" }}><option value="" disabled>Select a category</option>{Object.entries(categoryMeta).map(([key, meta]) => <option value={key} key={key}>{meta.label}</option>)}</select></label></div><label>Give it a short title<input name="title" minLength={6} maxLength={120} required placeholder="e.g. Streetlight not working near the park" /></label><label>Describe what happened<textarea name="description" minLength={20} maxLength={2000} required placeholder="Share details that help the department act..." rows={5} /></label><LocationPicker /></div><div className={step === 2 ? "form-step" : "form-step hidden"}><div className="upload-zone"><span>+</span><h3>Add photo evidence</h3><p>Up to 4 images, 5 MB each. JPG, PNG or WEBP.</p><input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => setFiles(Array.from(event.target.files ?? []).slice(0,4))} aria-label="Upload evidence photos" />{files.length > 0 && <b>{files.length} photo{files.length > 1 ? "s" : ""} selected</b>}</div><div className="consent"><span>OK</span><p><b>Your privacy matters</b><small>Personal details are used only to process your complaint. Public statistics are anonymized.</small></p></div></div>{error && <p className="form-error">{error}</p>}<div className="form-actions">{step === 2 && <button type="button" className="btn btn-outline" onClick={() => setStep(1)}>Back</button>}<button type="submit" className="btn btn-primary" disabled={busy}>{busy ? "Submitting..." : step === 1 ? "Continue" : "Submit complaint"}</button></div></form></Modal>;
+  return <Modal title="File a complaint" eyebrow="NO ACCOUNT OR LOGIN REQUIRED" onClose={onClose} wide><p className="no-login-note">Your contact details let the department send updates. They are never displayed in the public gallery.</p><div className="form-progress"><span className="active"><i>1</i>Contact & concern</span><em /><span className={step >= 2 ? "active" : ""}><i>2</i>Evidence & review</span></div><form className="complaint-form" onSubmit={submit}><div className={step === 1 ? "form-step" : "form-step hidden"}><div className="contact-fields"><label>Your name<input name="citizenName" minLength={2} maxLength={100} required placeholder="Full name" /></label><label>Phone number<input name="citizenPhone" type="tel" inputMode="tel" pattern="\+?[0-9]{10,15}" required placeholder="+91 9876543210" /></label><label>Email address (Optional)<input name="citizenEmail" type="email" placeholder="you@example.com" /></label></div><div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", margin: "16px 0" }}><label style={{ margin: 0 }}>Grievance Language / शिकायत की भाषा<select value={selectedLang} onChange={(event) => setSelectedLang(event.target.value)} style={{ marginTop: "6px" }}>{["English", "Hindi", "Bengali", "Marathi", "Telugu", "Tamil", "Gujarati", "Urdu", "Kannada", "Odia", "Malayalam", "Punjabi"].map((lang) => <option key={lang} value={lang}>{lang}</option>)}</select></label><label style={{ margin: 0 }}>What is this about?<select name="category" required defaultValue="" style={{ marginTop: "6px" }}><option value="" disabled>Select a category</option>{Object.entries(categoryMeta).map(([key, meta]) => <option value={key} key={key}>{meta.label}</option>)}</select></label></div><label>Give it a short title<input name="title" minLength={6} maxLength={120} required placeholder="e.g. Streetlight not working near the park" /></label><label>Describe what happened<textarea name="description" minLength={20} maxLength={2000} required placeholder="Share details that help the department act..." rows={5} /></label><LocationPicker /></div><div className={step === 2 ? "form-step" : "form-step hidden"}><div className="upload-zone"><span>+</span><h3>Add photo evidence</h3><p>Up to 4 images, 5 MB each. JPG, PNG or WEBP.</p><input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { const incoming = Array.from(event.target.files ?? []); setFiles((prev) => [...prev, ...incoming].slice(0, 4)); event.target.value = ""; }} aria-label="Upload evidence photos" />{files.length > 0 && <b>{files.length} photo{files.length > 1 ? "s" : ""} selected</b>}</div><ImageUploadPreview files={files} onRemove={(index) => setFiles((prev) => prev.filter((_, i) => i !== index))} maxFiles={4} /><div className="consent"><span>OK</span><p><b>Your privacy matters</b><small>Personal details are used only to process your complaint. Public statistics are anonymized.</small></p></div></div>{error && <p className="form-error">{error}</p>}<div className="form-actions">{step === 2 && <button type="button" className="btn btn-outline" onClick={() => setStep(1)}>Back</button>}<button type="submit" className="btn btn-primary" disabled={busy}>{busy ? "Submitting..." : step === 1 ? "Continue" : "Submit complaint"}</button></div></form></Modal>;
 }
 
 function TrackModal({ onClose, onSelect }: { onClose: () => void; onSelect: (complaint: Complaint) => void }) {
@@ -1060,8 +1072,9 @@ function UpdateModal({ complaint, portal, onClose, onChanged }: { complaint: Com
         {status === "resolved" && (
           <label className="resolution-upload">
             Resolution photos <small>Published in the solved gallery (Up to 4 images)</small>
-            <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => setPhotos(Array.from(event.target.files ?? []).slice(0, 4))} />
+            <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { const incoming = Array.from(event.target.files ?? []); setPhotos((prev) => [...prev, ...incoming].slice(0, 4)); event.target.value = ""; }} />
             {photos.length > 0 && <b>✓ {photos.length} photo{photos.length > 1 ? "s" : ""} selected</b>}
+            <ImageUploadPreview files={photos} onRemove={(index) => setPhotos((prev) => prev.filter((_, i) => i !== index))} maxFiles={4} />
           </label>
         )}
         {error && <p className="form-error">{error}</p>}

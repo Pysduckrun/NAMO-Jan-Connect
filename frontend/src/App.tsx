@@ -6,6 +6,7 @@ import GalleryPage from "./components/GalleryPage";
 import PrivacyPage from "./components/PrivacyPage";
 import AccessibilityPage from "./components/AccessibilityPage";
 import ContactPage from "./components/ContactPage";
+import ForgotPasswordModal from "./components/ForgotPasswordModal";
 import AccessibilityBar from "./components/AccessibilityBar";
 import { LanguageProvider, useLanguage } from "./context/LanguageContext";
 import { apiFetch, readJson, getCookie, setCookie, eraseCookie } from "./api";
@@ -16,7 +17,9 @@ import {
   FileText, 
   ArrowLeft, 
   Heart, 
-  Users2 
+  Users2,
+  ChevronDown,
+  Lock
 } from "lucide-react";
 
 type Portal = "admin" | "department";
@@ -40,7 +43,16 @@ const departmentPaths: Record<string, { category: string; label: string }> = {
   "/employment-welfare": { category: "employment_welfare", label: "Employment & Welfare" },
 };
 
-function StaffLogin(props: { portal: Portal; departmentCategory?: string; departmentLabel?: string; children: React.ReactNode }) {
+const PORTAL_OPTIONS = [
+  { value: "admin", label: "Central Administration", hindi: "केंद्रीय प्रशासन", path: "/admin", isDept: false },
+  { value: "civic_infra", label: "Civic & Infrastructure", hindi: "नागरिक एवं अवसंरचना", path: "/civic-infra", isDept: true },
+  { value: "health_edu", label: "Health & Education", hindi: "स्वास्थ्य एवं शिक्षा", path: "/health-education", isDept: true },
+  { value: "law_order", label: "Law & Order", hindi: "कानून और व्यवस्था", path: "/law-order", isDept: true },
+  { value: "transport", label: "Transport & Public Services", hindi: "परिवहन एवं जन सेवाएं", path: "/transport", isDept: true },
+  { value: "employment_welfare", label: "Employment & Welfare", hindi: "रोजगार एवं कल्याण", path: "/employment-welfare", isDept: true },
+];
+
+function StaffLogin(props: { portal?: Portal; departmentCategory?: string; departmentLabel?: string; children?: React.ReactNode }) {
   return (
     <LanguageProvider>
       <StaffLoginInner {...props} />
@@ -48,7 +60,7 @@ function StaffLogin(props: { portal: Portal; departmentCategory?: string; depart
   );
 }
 
-function StaffLoginInner({ portal, departmentCategory, departmentLabel, children }: { portal: Portal; departmentCategory?: string; departmentLabel?: string; children: React.ReactNode }) {
+function StaffLoginInner({ portal: initialPortal = "department", departmentCategory: initialCategory, departmentLabel: initialLabel, children }: { portal?: Portal; departmentCategory?: string; departmentLabel?: string; children?: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(() => {
     try {
       const fromCookie = getCookie("njc_staff_session");
@@ -58,21 +70,33 @@ function StaffLoginInner({ portal, departmentCategory, departmentLabel, children
       return null;
     }
   });
-  const [loginIdentifier, setLoginIdentifier] = useState(() => getCookie("njc_saved_email") || "");
-  const [loginPassword, setLoginPassword] = useState(() => getCookie("njc_saved_password") || "");
+
+  // Selected portal in dropdown: "admin" or category key ("civic_infra", etc.)
+  const defaultSelectedKey = initialPortal === "admin" 
+    ? "admin" 
+    : (initialCategory || "civic_infra");
+
+  const [selectedPortalKey, setSelectedPortalKey] = useState<string>(defaultSelectedKey);
+  const [loginIdentifier, setLoginIdentifier] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+
+  // Clear any legacy saved credentials from cookies on mount to guarantee fields stay blank on reload
+  useEffect(() => {
+    eraseCookie("njc_saved_email");
+    eraseCookie("njc_saved_password");
+  }, []);
 
   const [error, setError] = useState(""); 
   const [busy, setBusy] = useState(false);
   const { t, language } = useLanguage();
 
-  const [activeTab, setActiveTab] = useState<"signin" | "signup">("signin");
-  const [departments, setDepartments] = useState<{ id: number; name: string; category: string }[]>([]);
-  const [regSuccess, setRegSuccess] = useState("");
-  const [regError, setRegError] = useState("");
+  const [showForgot, setShowForgot] = useState(false);
 
-  const [regEmail, setRegEmail] = useState("");
-  const [regPassword, setRegPassword] = useState("");
-  const [regDeptId, setRegDeptId] = useState("");
+  // Active target portal definition based on dropdown
+  const currentOption = PORTAL_OPTIONS.find((opt) => opt.value === selectedPortalKey) || PORTAL_OPTIONS[0];
+  const targetPortal: Portal = currentOption.value === "admin" ? "admin" : "department";
+  const targetCategory = currentOption.value === "admin" ? undefined : currentOption.value;
+  const targetLabel = currentOption.label;
 
   useEffect(() => {
     if (session) {
@@ -82,25 +106,10 @@ function StaffLoginInner({ portal, departmentCategory, departmentLabel, children
     }
   }, [session]);
 
-  useEffect(() => {
-    if (portal === "department") {
-      apiFetch("/api/departments")
-        .then(res => res.ok ? readJson<{ departments: any[] }>(res) : Promise.reject())
-        .then(data => {
-          setDepartments(data.departments || []);
-          if (data.departments && data.departments.length > 0) {
-            setRegDeptId(String(data.departments[0].id));
-          }
-        })
-        .catch(() => {});
-    }
-  }, [portal]);
-
   async function login(event: FormEvent<HTMLFormElement>) { 
     event.preventDefault(); 
     setBusy(true); 
     setError(""); 
-    setRegSuccess("");
     const data = new FormData(event.currentTarget);
     const identifierVal = String(data.get("identifier") || "");
     const passwordVal = String(data.get("password") || "");
@@ -112,54 +121,33 @@ function StaffLoginInner({ portal, departmentCategory, departmentLabel, children
       }); 
       const result = await readJson<Session & { detail?: string }>(response); 
       if (!response.ok) throw new Error(result.detail || "Sign-in failed"); 
-      if (portal === "admin" && result.role !== "admin") throw new Error("Administrator credentials required"); 
-      if (portal === "department") { 
-        if (!["department_staff", "admin"].includes(result.role)) throw new Error("Department credentials required"); 
-        if (result.role !== "admin" && departmentCategory && result.department_category !== departmentCategory) { 
-          throw new Error(`This account does not have access to the ${departmentLabel || "requested"} portal.`); 
+
+      if (targetPortal === "admin" && result.role !== "admin") {
+        throw new Error("Administrator credentials required for Central Administration portal.");
+      }
+      if (targetPortal === "department") { 
+        if (!["department_staff", "admin"].includes(result.role)) {
+          throw new Error("Department officer credentials required.");
+        }
+        if (result.role !== "admin" && targetCategory && result.department_category !== targetCategory) { 
+          throw new Error(`This account is assigned to another department, not ${targetLabel}.`); 
         } 
       } 
       const sessionStr = JSON.stringify(result);
       localStorage.setItem("njc_staff_session", sessionStr);
       setCookie("njc_staff_session", sessionStr, 30);
-      setCookie("njc_saved_email", identifierVal, 30);
-      setCookie("njc_saved_password", passwordVal, 30);
       setSession(result); 
+
+      // If we are on /dashboard or on a mismatching URL, navigate to the portal route
+      const targetUrl = currentOption.path;
+      if (window.location.pathname !== targetUrl && window.location.pathname === "/dashboard") {
+        window.history.pushState({}, "", targetUrl);
+      }
     } catch (caught) { 
       setError(caught instanceof Error ? caught.message : "Sign-in failed"); 
     } finally { 
       setBusy(false); 
     } 
-  }
-
-  async function handleRegister(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setBusy(true);
-    setRegError("");
-    setRegSuccess("");
-    try {
-      const response = await apiFetch("/api/auth/register", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email: regEmail, password: regPassword, departmentId: Number(regDeptId) })
-      });
-      const result = await readJson<{ ok: boolean; message?: string; detail?: string }>(response);
-      if (!response.ok) {
-        throw new Error(result.detail || result.message || "Registration failed");
-      }
-      setCookie("njc_saved_email", regEmail, 30);
-      setCookie("njc_saved_password", regPassword, 30);
-      setLoginIdentifier(regEmail);
-      setLoginPassword(regPassword);
-      setRegSuccess("Credentials configured successfully! You can now sign in using these details.");
-      setActiveTab("signin");
-      setRegEmail("");
-      setRegPassword("");
-    } catch (caught) {
-      setRegError(caught instanceof Error ? caught.message : "Registration failed");
-    } finally {
-      setBusy(false);
-    }
   }
 
   function handleSignOut() {
@@ -170,13 +158,13 @@ function StaffLoginInner({ portal, departmentCategory, departmentLabel, children
   }
 
   const isSessionInvalid = !session ? true : (
-    (portal === "admin" && session.role !== "admin") ||
-    (portal === "department" && 
+    (targetPortal === "admin" && session.role !== "admin") ||
+    (targetPortal === "department" && 
      !["department_staff", "admin"].includes(session.role)) ||
-    (portal === "department" && 
+    (targetPortal === "department" && 
      session.role !== "admin" && 
-     departmentCategory && 
-     session.department_category !== departmentCategory)
+     targetCategory && 
+     session.department_category !== targetCategory)
   );
 
   useEffect(() => {
@@ -185,153 +173,183 @@ function StaffLoginInner({ portal, departmentCategory, departmentLabel, children
     }
   }, [session, isSessionInvalid]);
 
-  if (session && !isSessionInvalid) return <>{children}<button className="staff-logout" onClick={handleSignOut}>Sign out</button></>;
+  if (session && !isSessionInvalid) {
+    if (children) {
+      return (
+        <>
+          {children}
+          <button className="staff-logout" onClick={handleSignOut}>
+            Sign out
+          </button>
+        </>
+      );
+    }
+    // Render the portal app directly based on selection
+    return (
+      <>
+        <NamoApp initialPortal={targetPortal} />
+        <button className="staff-logout" onClick={handleSignOut}>
+          Sign out
+        </button>
+      </>
+    );
+  }
   
-  const title = portal === "admin" ? t("login.admin_signin") : `${departmentLabel} Portal`;
-  const help = portal === "admin" ? t("login.admin_help") : (activeTab === "signin" ? t("login.dept_help") : "Configure new portal access credentials for your department.");
-  const emailLabel = portal === "admin" ? t("login.admin_email") : t("login.email");
+  const emailPlaceholder = targetPortal === "admin" ? "admin@namo.gov.in" : "officer@namo.gov.in";
 
   return (
-    <div className="portal-login-viewport">
+    <div className="split-login-viewport">
       <div className="tricolor-stripe" aria-hidden="true"><span /><span /><span /></div>
       <AccessibilityBar />
       
-      <main className="access-denied">
-        <div className="staff-login-card">
+      <main className="split-login-main">
+        <div className="split-login-container">
           
-          {/* Emblem Header */}
-          <div className="login-emblem-header">
-            <img src="/emblem.png" alt="Government of India Emblem" className="login-emblem-img" />
-            <b className="gov-label-en">{t("a11y.gov_label")}</b>
-            <span className="gov-label-hi">{t("a11y.gov_hindi")}</span>
-          </div>
-
-          <p className="secure-badge">
-            {t("login.secure_portal")}
-          </p>
-
-          <h1 className="login-title">{title}</h1>
-          <p className="login-desc">{help}</p>
-
-          {portal === "department" && (
-            <div className="login-tabs">
-              <button
-                type="button"
-                className={`login-tab-btn ${activeTab === "signin" ? "active" : ""}`}
-                onClick={() => { setActiveTab("signin"); setError(""); setRegError(""); }}
-              >
-                {language === "hi" ? "साइन इन" : "Sign In"}
-              </button>
-              <button
-                type="button"
-                className={`login-tab-btn ${activeTab === "signup" ? "active" : ""}`}
-                onClick={() => { setActiveTab("signup"); setError(""); setRegError(""); }}
-              >
-                {language === "hi" ? "साइन अप" : "Sign Up"}
-              </button>
-            </div>
-          )}
-
-          {activeTab === "signin" ? (
-            <form className="login-form-fields" onSubmit={login}>
-              {regSuccess && <p className="form-success-banner">{regSuccess}</p>}
+          {/* Left Hero Pane: Indian Flag Visual & National Branding */}
+          <section className="split-login-hero" aria-label="National Portal Branding">
+            <div className="split-hero-bg-overlay" />
+            <div className="split-hero-content">
+              <div className="split-emblem-wrap">
+                <img src="/emblem.png" alt="State Emblem of India" className="split-emblem-img" />
+              </div>
               
-              <label className="form-field-label">
-                <span className="form-label-row">
-                  <span>{emailLabel}</span>
-                  <span className="hindi-hint">ईमेल पता</span>
-                </span>
-                <input 
-                  name="identifier" 
-                  type="email" 
-                  required 
-                  value={loginIdentifier}
-                  onChange={(e) => setLoginIdentifier(e.target.value)}
-                  autoComplete="username" 
-                  placeholder={portal === "admin" ? "admin@namo.gov.in" : "officer@namo.gov.in"}
-                />
-              </label>
+              <div className="split-hero-titles">
+                <span className="split-hero-slogan">सत्यमेव जयते | SATYAMEVA JAYATE</span>
+                <h2 className="split-hero-h2">Government of India</h2>
+                <h3 className="split-hero-h3">भारत सरकार • राष्ट्रीय शिकायत निवारण</h3>
+                <p className="split-hero-sub">
+                  NAMO Jan Connect — Unified Governance, Rapid Redressal &amp; SLA Tracking Portal.
+                </p>
+              </div>
 
-              <label className="form-field-label">
-                <span className="form-label-row">
-                  <span>{t("login.password")}</span>
-                  <span className="hindi-hint">पासवर्ड</span>
+              <div className="split-hero-badges">
+                <span className="split-pill-badge">
+                  <Lock size={12} style={{ display: "inline", verticalAlign: "middle", marginRight: 4 }} />
+                  Restricted Official Access
                 </span>
-                <input 
-                  name="password" 
-                  type="password" 
-                  required 
-                  value={loginPassword}
-                  onChange={(e) => setLoginPassword(e.target.value)}
-                  autoComplete="current-password" 
-                  placeholder="••••••••••••"
-                />
-              </label>
-
-              {error && <p className="form-error-banner">{error}</p>}
-
-              <button className="btn btn-primary login-submit-btn" disabled={busy}>
-                {busy ? t("login.signing_in") : t("login.signin")}
-              </button>
-            </form>
-          ) : (
-            <form className="login-form-fields" onSubmit={handleRegister}>
-              <label className="form-field-label">
-                <span className="form-label-row">
-                  <span>Select Department</span>
-                  <span className="hindi-hint">विभाग चुनें</span>
+                <span className="split-pill-badge-outline">
+                  256-Bit Encrypted
                 </span>
-                <select 
-                  value={regDeptId}
-                  onChange={(e) => setRegDeptId(e.target.value)}
-                  required
+              </div>
+            </div>
+          </section>
+
+          {/* Right Form Pane: Clean Full-Height Sign-In Form */}
+          <section className="split-login-form-pane" aria-label="Officer Sign-in Form">
+            <div className="split-form-box">
+              
+              {/* Header inside form */}
+              <div className="split-form-header">
+                <div className="split-mobile-flag-banner" aria-hidden="true" />
+                <div className="split-form-badge">
+                  {t("login.secure_portal")}
+                </div>
+                <h1 className="split-form-title">Officer Sign In</h1>
+                <p className="split-form-sub">
+                  Select your assigned department or central administration to continue to your dashboard.
+                </p>
+              </div>
+
+              <form className="split-login-form" onSubmit={login}>
+                
+                {/* Dropdown: Choose Portal / Department */}
+                <label className="form-field-label">
+                  <span className="form-label-row">
+                    <span>Select Portal / Department</span>
+                    <span className="hindi-hint">पोर्टल / विभाग चुनें</span>
+                  </span>
+                  <div className="split-select-wrapper">
+                    <select
+                      value={selectedPortalKey}
+                      onChange={(e) => setSelectedPortalKey(e.target.value)}
+                      className="split-select-input"
+                      aria-label="Select Portal or Department"
+                    >
+                      {PORTAL_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label} ({opt.hindi})
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown size={16} className="split-select-chevron" aria-hidden="true" />
+                  </div>
+                </label>
+
+                {/* Email Field */}
+                <label className="form-field-label">
+                  <span className="form-label-row">
+                    <span>{targetPortal === "admin" ? t("login.admin_email") : t("login.email")}</span>
+                    <span className="hindi-hint">ईमेल पता</span>
+                  </span>
+                  <input
+                    name="identifier" 
+                    type="email" 
+                    required 
+                    value={loginIdentifier}
+                    onChange={(e) => setLoginIdentifier(e.target.value)}
+                    autoComplete="off" 
+                    placeholder={emailPlaceholder}
+                    className="split-text-input"
+                  />
+                </label>
+
+                {/* Password Field */}
+                <label className="form-field-label">
+                  <span className="form-label-row">
+                    <span>{t("login.password")}</span>
+                    <span className="hindi-hint">पासवर्ड</span>
+                  </span>
+                  <input
+                    name="password" 
+                    type="password" 
+                    required 
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    autoComplete="new-password" 
+                    placeholder="••••••••••••"
+                    className="split-text-input"
+                  />
+                </label>
+
+                {/* Forgot Password Link */}
+                <div className="login-forgot-row">
+                  <button
+                    type="button"
+                    className="forgot-password-link"
+                    onClick={() => setShowForgot(true)}
+                  >
+                    Forgot password? / पासवर्ड भूल गए?
+                  </button>
+                </div>
+
+                {error && <p className="form-error-banner" role="alert">{error}</p>}
+
+                {/* Submit Button */}
+                <button 
+                  type="submit" 
+                  className="btn btn-primary split-submit-btn" 
+                  disabled={busy}
                 >
-                  {departments.map((dept) => (
-                    <option key={dept.id} value={dept.id}>{dept.name}</option>
-                  ))}
-                </select>
-              </label>
+                  {busy ? t("login.signing_in") : `${t("login.signin")} to ${currentOption.label}`}
+                </button>
+              </form>
 
-              <label className="form-field-label">
-                <span className="form-label-row">
-                  <span>Staff Email</span>
-                  <span className="hindi-hint">ईमेल पता</span>
-                </span>
-                <input 
-                  type="email" 
-                  required 
-                  value={regEmail}
-                  onChange={(e) => setRegEmail(e.target.value)}
-                  placeholder="officer@namo.gov.in"
+              {showForgot && (
+                <ForgotPasswordModal 
+                  initialEmail={loginIdentifier} 
+                  onClose={() => setShowForgot(false)} 
                 />
-              </label>
+              )}
+              
+              <div className="split-footer-actions">
+                <a href="/" className="return-home-link">
+                  <ArrowLeft size={14} style={{ display: "inline", verticalAlign: "middle", marginRight: 4 }} />
+                  {t("login.return")}
+                </a>
+              </div>
+            </div>
+          </section>
 
-              <label className="form-field-label">
-                <span className="form-label-row">
-                  <span>Password</span>
-                  <span className="hindi-hint">पासवर्ड (न्यूनतम 8 वर्ण)</span>
-                </span>
-                <input 
-                  type="password" 
-                  required 
-                  value={regPassword}
-                  onChange={(e) => setRegPassword(e.target.value)}
-                  placeholder="••••••••••••"
-                  minLength={8}
-                />
-              </label>
-
-              {regError && <p className="form-error-banner">{regError}</p>}
-
-              <button className="btn btn-primary login-submit-btn" disabled={busy}>
-                {busy ? "Registering..." : "Configure Portal Access"}
-              </button>
-            </form>
-          )}
-          
-          <a href="/" className="return-home-link">
-            {t("login.return")}
-          </a>
         </div>
       </main>
     </div>
@@ -439,7 +457,8 @@ export default function App() {
   document.documentElement.dataset.fontsize = f;
   if (path === "/admin") return <StaffLogin portal="admin"><NamoApp initialPortal="admin" /></StaffLogin>;
   if (path === "/citizen") return <NamoApp initialPortal="citizen" />;
-  if (path === "/dashboard") return <DashboardHub />;
+  if (path === "/dashboard") return <StaffLogin />;
+  if (path === "/hub") return <DashboardHub />;
   if (path === "/how-it-works") return <HowItWorksPage />;
   if (path === "/about") return <AboutPage />;
   if (path === "/gallery") return <GalleryPage />;

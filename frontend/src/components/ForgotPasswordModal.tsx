@@ -3,11 +3,12 @@ import Modal from "./Modal";
 import { requestPasswordReset } from "../api";
 
 interface ForgotPasswordModalProps {
+  initialEmail?: string;
   onClose: () => void;
 }
 
-export default function ForgotPasswordModal({ onClose }: ForgotPasswordModalProps) {
-  const [email, setEmail] = useState("");
+export default function ForgotPasswordModal({ initialEmail = "", onClose }: ForgotPasswordModalProps) {
+  const [email, setEmail] = useState(initialEmail);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
